@@ -1,0 +1,7 @@
+FROM qwen2.5:14b
+SYSTEM """
+
+"""
+PARAMETER temperature 0.5
+PARAMETER num_ctx 4096
+PARAMETER num_predict 1000
