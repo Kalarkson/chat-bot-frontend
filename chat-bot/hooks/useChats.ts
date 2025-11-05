@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useAuth } from './useAuth';
 import { Chat, ChatDetail, Message, CreateChatRequest, AddMessageRequest } from '../types';
+import { appConfig } from './useConfig';
 
 export const useChats = () => {
   const [chats, setChats] = useState<Chat[]>([]);
@@ -10,7 +11,7 @@ export const useChats = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+  const API_BASE_URL = appConfig.apiUrl;
 
   const fetchUserChats = useCallback(async (options: { background?: boolean } = {}) => {
     const { background = false } = options;

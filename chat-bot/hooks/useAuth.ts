@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { User, AuthResponse, LoginForm, RegisterForm } from '../types';
+import { appConfig } from './useConfig'; 
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+const API_BASE_URL = appConfig.apiUrl;
 
 export const useAuth = () => {
   const [loading, setLoading] = useState<boolean>(false);

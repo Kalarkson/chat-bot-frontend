@@ -4,12 +4,9 @@ services:
     restart: unless-stopped
     build:
       context: .
-    env_file:
-      - .env
-    ports:
-      - "3000:3000"
+      dockerfile: Dockerfile
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-    volumes:
-      - ./logs:/app/logs
+      - PORT=4003
+    ports:
+      - "4003:4003"

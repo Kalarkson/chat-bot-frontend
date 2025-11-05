@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
+import { appConfig } from './useConfig';
 
 export const useAI = () => {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -27,7 +28,9 @@ export const useAI = () => {
         })),
         { role: 'user', content: message }
       ];
-      const response = await fetch('http://localhost:11434/api/chat', {
+      const OLLAMA_URL = appConfig.ollamaUrl;
+      
+      const response = await fetch(`${OLLAMA_URL}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
