@@ -36,9 +36,12 @@ export const useAI = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'chat-bot',
+          model: 'chat-bot:latest',
           messages: messagesForAI,
-          stream: true
+          stream: true,
+          options: {
+            thinking: true,
+          }
         }),
         signal: abortControllerRef.current.signal
       });
