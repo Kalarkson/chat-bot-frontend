@@ -10,4 +10,4 @@ RUN npm run build
 
 EXPOSE 4003
 
-CMD ["npm", "start"]
+CMD ["npm", "start", "--", "-H", "0.0.0.0"]

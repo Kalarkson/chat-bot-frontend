@@ -70,3 +70,14 @@ export interface UIMessage {
   text: string;
   isUser: boolean;
 }
+
+export interface UIMessage {
+  id: number;
+  text: string;
+  isUser: boolean;
+}
+
+export interface ImageUIMessage extends UIMessage {
+  imageBase64?: string;
+  isGeneratingImage?: boolean;
+}

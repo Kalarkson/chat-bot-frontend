@@ -1,15 +1,19 @@
 import React, { useState } from 'react';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, Loader2 } from 'lucide-react';
 import { formatMessage } from '../utils/formatMessage';
 
-interface Message {
-  id: number;
-  text: string;
-  isUser: boolean;
+interface MessageBubbleProps {
+  message: {
+    id: number;
+    text: string;
+    isUser: boolean;
+    isGeneratingImage?: boolean;
+  };
 }
 
-const MessageBubble = ({ message }: { message: Message }) => {
+const MessageBubble = ({ message }: MessageBubbleProps) => {
   const [copied, setCopied] = useState(false);
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(message.text);
@@ -19,7 +23,41 @@ const MessageBubble = ({ message }: { message: Message }) => {
       console.error('Failed to copy: ', err);
     }
   };
+
+  const imageMatch = message.text.match(/!\[Generated Image\]\(data:image\/png;base64,([^)]+)\)/);
+
+  if (message.isGeneratingImage) {
+    return (
+      <div className="w-full flex justify-start">
+        <div className="max-w-full">
+          <div className="bg-transparent text-gray-200">
+            <div className="bg-[#1e1e20]/80 text-gray-300 px-5 py-3 rounded-2xl inline-flex items-center gap-3 backdrop-blur-sm">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+              <span>{message.text || 'Генерирую изображение...'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (imageMatch && imageMatch[1]) {
+    const base64 = imageMatch[1];
+    return (
+      <div className="w-full flex justify-start">
+        <div className="max-w-full">
+          <img
+            src={`data:image/png;base64,${base64}`}
+            alt="Сгенерированное изображение"
+            className="rounded-xl max-w-full h-auto shadow-xl border border-[#38383a]/60"
+          />
+        </div>
+      </div>
+    );
+  }
+
   const formattedText = formatMessage(message.text);
+  
   return (
     <div className={`w-full ${message.isUser ? 'flex justify-end' : 'flex justify-start'}`}>
       <div className={`${message.isUser ? 'max-w-[83.333%]' : 'max-w-full'}`}>

@@ -4,19 +4,22 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import ChatInput from '../components/ChatInput';
 import MessageBubble from '../components/MessageBubble';
 import SideMenu from '../components/SideMenu';
-import { Menu, Plus } from 'lucide-react';
+import { Menu, Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useChats } from '../hooks/useChats';
 import { useAI } from '../hooks/useAI';
-import { UIMessage, ChatHistory } from '../types';
+import { UIMessage, ChatHistory, Message as ChatMessage } from '../types';
 import { formatMessage } from '../utils/formatMessage';
+
+interface ImageUIMessage extends UIMessage {
+  imageBase64?: string;
+  isGeneratingImage?: boolean;
+}
 
 export default function Home() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [currentAIMessage, setCurrentAIMessage] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [streamingChatId, setStreamingChatId] = useState<string | null>(null);
+  const [isClient, setIsClient] = useState(false);
 
   const { user, loading: authLoading } = useAuth();
   const {
@@ -37,23 +40,70 @@ export default function Home() {
   const {
     isGenerating,
     error: aiError,
-    sendMessageToAI,
-    processStreamResponse,
+    isGeneratingImage,
+    imageError,
+    streamingChatId,
+    imageGeneratingChatId,
+    currentAIMessage,
+    abortControllerRef,
     stopGeneration,
+    handleImageGeneration,
+    handleTextGeneration,
     clearError: clearAIError,
+    clearImageError,
   } = useAI();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
-  const uiMessages: UIMessage[] = useMemo(() =>
-    currentChat?.messages?.map((msg, index) => ({
-      id: index,
-      text: formatMessage(msg.content),
-      isUser: msg.role === 'user',
-    })) || [],
-    [currentChat?.messages]
-  );
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  const uiMessages: ImageUIMessage[] = useMemo(() => {
+    const messages: ImageUIMessage[] = [];
+
+    if (currentChat?.messages) {
+      currentChat.messages.forEach((msg: ChatMessage, index: number) => {
+        if (msg.role === 'assistant' && msg.content?.startsWith('![Generated Image]')) {
+          const match = msg.content.match(
+            /!\[Generated Image\]\(data:image\/png;base64,([^)]+)\)/
+          );
+          if (match && match[1]) {
+            messages.push({
+              id: index,
+              text: '',
+              isUser: false,
+              imageBase64: match[1],
+            });
+          } else {
+            messages.push({
+              id: index,
+              text: formatMessage(msg.content),
+              isUser: false,
+            });
+          }
+        } else {
+          messages.push({
+            id: index,
+            text: formatMessage(msg.content),
+            isUser: msg.role === 'user',
+          });
+        }
+      });
+    }
+
+    if (isClient && isGeneratingImage && imageGeneratingChatId === currentChat?.id) {
+      messages.push({
+        id: Date.now(),
+        text: 'Генерирую изображение...',
+        isUser: false,
+        isGeneratingImage: true,
+      });
+    }
+
+    return messages;
+  }, [currentChat?.messages, isGeneratingImage, imageGeneratingChatId, isClient]);
 
   const chatHistory: ChatHistory[] = useMemo(() =>
     chats?.map(c => ({
@@ -92,26 +142,12 @@ export default function Home() {
   }, [currentChat?.id]);
 
   useEffect(() => {
-    if (isStreaming && messagesEndRef.current) {
+    if ((isGenerating || isGeneratingImage) && messagesEndRef.current) {
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
       }, 50);
     }
-  }, [isStreaming]);
-
-  useEffect(() => {
-    if (!isStreaming && currentAIMessage === '' && streamingChatId === currentChat?.id) {
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
-    }
-  }, [isStreaming, currentAIMessage, currentChat?.id]);
-
-  const handleStopGeneration = useCallback(() => {
-    stopGeneration();
-    setIsStreaming(false);
-    setStreamingChatId(null);
-  }, [stopGeneration]);
+  }, [isGenerating, isGeneratingImage]);
 
   const savePartialResponse = useCallback(async (chatId: string, partialText: string) => {
     if (partialText.trim()) {
@@ -120,102 +156,89 @@ export default function Home() {
         await fetchChat(chatId);
         await fetchUserChats({ background: true });
       } catch (saveError) {
+        console.error('Ошибка сохранения частичного ответа:', saveError);
       }
     }
   }, [addMessageToChat, fetchChat, fetchUserChats]);
 
-  const handleAIMessage = async (text: string, chatId: string) => {
-    if (!user || isGenerating || isStreaming) return;
-    try {
-      setIsStreaming(true);
-      setCurrentAIMessage('');
-      setStreamingChatId(chatId);
-      const currentMessages = currentChat?.messages || [];
-      const stream = await sendMessageToAI(text, currentMessages);
-      if (!stream) {
-        setIsStreaming(false);
-        setCurrentAIMessage('');
-        setStreamingChatId(null);
-        return;
-      }
-      let fullText = '';
-      let hasSaved = false;
-      await processStreamResponse(
-        stream,
-        (chunk) => {
-          fullText += chunk;
-          setCurrentAIMessage(fullText);
-        },
-        async (completeText) => {
-          if (completeText.trim() && !hasSaved) {
-            await addMessageToChat(chatId, 'assistant', completeText);
-            await fetchChat(chatId);
-            await fetchUserChats({ background: true });
-            hasSaved = true;
-          }
-          setCurrentAIMessage('');
-          setIsStreaming(false);
-          setStreamingChatId(null);
-        },
-        async (error) => {
-          if (fullText.trim() && !hasSaved) {
-            await savePartialResponse(chatId, fullText);
-            hasSaved = true;
-          }
-          setIsStreaming(false);
-          setCurrentAIMessage('');
-          setStreamingChatId(null);
-        },
-        async (partialText) => {
-          if (partialText.trim() && !hasSaved) {
-            await savePartialResponse(chatId, partialText);
-            hasSaved = true;
-          }
-          setCurrentAIMessage('');
-          setIsStreaming(false);
-          setStreamingChatId(null);
-        }
-      );
-    } catch (error) {
-      setIsStreaming(false);
-      setCurrentAIMessage('');
-      setStreamingChatId(null);
-    }
-  };
+const handleSendMessage = async (text: string) => {
+  if (!user || isGenerating || isGeneratingImage) return;
 
-  const handleSendMessage = async (text: string) => {
-    if (!user || isGenerating || isStreaming) return;
-    let chatId = currentChat?.id;
-    try {
+  const trimmed = text.trim();
+  const imageCommandMatch = trimmed.match(/^сгенерируй изображение:\s*(.+)$/i);
+
+  let chatId: string | undefined = currentChat?.id;
+
+  try {
+    if (imageCommandMatch) {
+    } else {
       if (!chatId) {
         chatId = await createNewChat(text);
+        if (!chatId) {
+          console.error('Не удалось создать чат');
+          return;
+        }
         await fetchChat(chatId);
-        await fetchUserChats({ background: true });
       } else {
         await addMessageToChat(chatId, 'user', text);
         await fetchChat(chatId);
-        await fetchUserChats({ background: true });
       }
-      await handleAIMessage(text, chatId);
-    } catch (error) {
+
+      const updatedChat = await fetchChat(chatId);
+      const messages = updatedChat?.messages || [];
+      const currentChatId = chatId;
+
+      let hasSaved = false;
+
+      await handleTextGeneration(
+        text,
+        currentChatId,
+        messages,
+        (chunk) => {
+          console.log('Получен чанк:', chunk);
+        },
+        async (completeText) => {
+          if (!currentChatId || !completeText.trim() || hasSaved) return;
+          
+          hasSaved = true;
+          await addMessageToChat(currentChatId, 'assistant', completeText);
+          await fetchChat(currentChatId);
+          await fetchUserChats({ background: true });
+        },
+        (error) => {
+          console.error('Ошибка генерации текста:', error);
+        },
+        async (partialText) => {
+          if (!currentChatId || !partialText.trim() || hasSaved) return;
+          
+          const wasAborted = abortControllerRef.current?.signal.aborted;
+          if (wasAborted) {
+            hasSaved = true;
+            await addMessageToChat(currentChatId, 'assistant', partialText);
+            await fetchChat(currentChatId);
+            await fetchUserChats({ background: true });
+          }
+        }
+      );
     }
-  };
+  } catch (error) {
+    console.error('Ошибка при отправке сообщения:', error);
+  }
+};
 
   const handleSelectChat = useCallback(async (chatId: string) => {
     await fetchChat(chatId);
-    setCurrentAIMessage('');
   }, [fetchChat]);
 
   const handleNewChat = useCallback(() => {
     setCurrentChat(null);
-    setCurrentAIMessage('');
   }, [setCurrentChat]);
 
   const handleTogglePin = useCallback(async (chatId: string, currentPinState: boolean) => {
     try {
-      const newPinState = !currentPinState;
-      await togglePinChat(chatId, newPinState);
+      await togglePinChat(chatId, !currentPinState);
     } catch (error) {
+      console.error('Ошибка при закреплении чата:', error);
     }
   }, [togglePinChat]);
 
@@ -224,20 +247,21 @@ export default function Home() {
       await deleteChat(chatId);
       if (currentChat?.id === chatId) {
         setCurrentChat(null);
-        setCurrentAIMessage('');
       }
     } catch (error) {
+      console.error('Ошибка при удалении чата:', error);
     }
   }, [deleteChat, currentChat?.id, setCurrentChat]);
 
   const clearAllErrors = useCallback(() => {
     clearChatsError();
     clearAIError();
-  }, [clearChatsError, clearAIError]);
+    clearImageError();
+  }, [clearChatsError, clearAIError, clearImageError]);
 
   const showCurrentAIMessage = currentAIMessage && streamingChatId === currentChat?.id;
 
-  if (authLoading) {
+  if (!isClient || authLoading) {
     return (
       <div className="min-h-screen bg-[#151517] flex items-center justify-center">
         <div className="text-white">Загрузка...</div>
@@ -245,11 +269,11 @@ export default function Home() {
     );
   }
 
-  if (chatsError || aiError) {
+  if (chatsError || aiError || imageError) {
     return (
       <div className="min-h-screen bg-[#151517] flex items-center justify-center">
         <div className="text-center">
-          <div className="text-red-400 text-xl mb-4">Ошибка: {chatsError || aiError}</div>
+          <div className="text-red-400 text-xl mb-4">Ошибка: {chatsError || aiError || imageError}</div>
           <button
             onClick={clearAllErrors}
             className="bg-[#5686fe] text-white px-4 py-2 rounded-lg hover:bg-[#4970fe]"
@@ -275,7 +299,7 @@ export default function Home() {
         <button
           onClick={handleNewChat}
           className="p-2 bg-[#1e1e20] rounded-lg hover:bg-[#38383a] border border-[#38383a]"
-          disabled={isGenerating || isStreaming}
+          disabled={isGenerating || isGeneratingImage}
         >
           <Plus className="w-5 h-5 text-gray-400" />
         </button>
@@ -303,9 +327,6 @@ export default function Home() {
                   {currentChat.is_pinned && ' 📌'}
                 </p>
               )}
-              {isStreaming && streamingChatId !== currentChat?.id && (
-                <p className="text-blue-400 text-sm mt-1">AI генерирует...</p>
-              )}
             </div>
           )}
 
@@ -315,15 +336,40 @@ export default function Home() {
             style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
           >
             <div className="flex flex-col gap-4 w-full">
-              {uiMessages.length === 0 && !currentChat && !currentAIMessage && (
+              {uiMessages.length === 0 && !currentChat && !currentAIMessage && !isGeneratingImage && (
                 <div className="text-center py-8">
-                  <div className="text-gray-500 text-lg">Начните новый диалог с AI</div>
-                  <div className="text-gray-400 text-sm mt-2">Задайте любой вопрос в поле ниже</div>
+                  <div className="text-gray-500 text-lg">Начните диалог с AI</div>
+                  <div className="text-gray-400 text-sm mt-2">
+                      Для генерации изображения нужно написать <span className="font-mono bg-[#2a2a2c] px-1 rounded">сгенерируй изображение: [описание]</span>
+                  </div>
                 </div>
               )}
-              {uiMessages.map(m => (
-                <MessageBubble key={m.id} message={m} />
+
+              {uiMessages.map((msg) => (
+                <div key={msg.id} className="w-full">
+                  {msg.imageBase64 ? (
+                    <div className="flex justify-start">
+                      <div className="max-w-full">
+                        <img
+                          src={`data:image/png;base64,${msg.imageBase64}`}
+                          alt="Сгенерированное изображение"
+                          className="rounded-xl max-w-full h-auto shadow-xl border border-[#38383a]/60"
+                        />
+                      </div>
+                    </div>
+                  ) : msg.isGeneratingImage ? (
+                    <div className="flex justify-start">
+                      <div className="bg-[#1e1e20]/80 text-gray-300 px-5 py-3 rounded-2xl inline-flex items-center gap-3 backdrop-blur-sm">
+                        <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                        <span>{msg.text}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <MessageBubble message={msg} />
+                  )}
+                </div>
               ))}
+
               {showCurrentAIMessage && (
                 <div className="w-full flex justify-start">
                   <div className="max-w-full">
@@ -332,25 +378,28 @@ export default function Home() {
                         className="text-gray-200 w-full text-sm mobile:text-base tablet:text-lg break-words whitespace-pre-wrap leading-relaxed"
                         dangerouslySetInnerHTML={{ __html: formattedCurrentAIMessage }}
                       />
-                      {isStreaming && <span className="ml-1 animate-pulse">|</span>}
+                      {isGenerating && <span className="ml-1 animate-pulse">|</span>}
                     </div>
                   </div>
                 </div>
               )}
-              {isStreaming && streamingChatId !== currentChat?.id && !isMobile && (
+
+              {isGeneratingImage && imageGeneratingChatId && imageGeneratingChatId !== currentChat?.id && (
                 <div className="w-full flex justify-center">
                   <div className="bg-blue-500/20 border border-blue-500 text-blue-300 p-3 rounded-lg text-sm">
-                    AI генерирует ответ в другом чате...
+                    Генерация изображения в другом чате...
                   </div>
                 </div>
               )}
-              {(aiError || chatsError) && (
-                <div className="w-full flex justify-start">
-                  <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-lg text-sm">
-                    {aiError || chatsError}
+
+              {isGenerating && streamingChatId && streamingChatId !== currentChat?.id && (
+                <div className="w-full flex justify-center">
+                  <div className="bg-blue-500/20 border border-blue-500 text-blue-300 p-3 rounded-lg text-sm">
+                    AI отвечает в другом чате...
                   </div>
                 </div>
               )}
+
               <div className="h-8" />
               <div ref={messagesEndRef} />
             </div>
@@ -360,10 +409,10 @@ export default function Home() {
 
       <ChatInput
         onSendMessage={handleSendMessage}
-        onStopGeneration={handleStopGeneration}
+        onStopGeneration={stopGeneration}
         isMenuOpen={isMenuOpen && !isMobile}
-        disabled={isGenerating || chatsLoading}
-        isGenerating={isStreaming}
+        disabled={isGenerating || chatsLoading || isGeneratingImage}
+        isGenerating={isGenerating || isGeneratingImage}
       />
     </main>
   );
