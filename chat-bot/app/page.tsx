@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import ChatInput from '../components/ChatInput';
 import MessageBubble from '../components/MessageBubble';
 import SideMenu from '../components/SideMenu';
-import { Menu, Plus, Loader2 } from 'lucide-react';
+import { Menu, Plus, Loader2, X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useChats } from '../hooks/useChats';
 import { useAI } from '../hooks/useAI';
@@ -16,10 +16,18 @@ interface ImageUIMessage extends UIMessage {
   isGeneratingImage?: boolean;
 }
 
+interface ToastNotification {
+  id: string;
+  type: 'error' | 'success' | 'info';
+  message: string;
+  timeout?: number;
+}
+
 export default function Home() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isClient, setIsClient] = useState(false);
+  const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
   const { user, loading: authLoading } = useAuth();
   const {
@@ -56,9 +64,48 @@ export default function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
+  // Функция для добавления уведомления
+  const addToast = useCallback((type: ToastNotification['type'], message: string, timeout = 5000) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id, type, message, timeout }]);
+    
+    if (timeout > 0) {
+      setTimeout(() => {
+        setToasts(prev => prev.filter(toast => toast.id !== id));
+      }, timeout);
+    }
+  }, []);
+
+  // Функция для удаления уведомления
+  const removeToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  }, []);
+
   useEffect(() => {
     setIsClient(true);
   }, []);
+
+  // Отслеживаем ошибки и показываем уведомления
+  useEffect(() => {
+    if (chatsError) {
+      addToast('error', chatsError);
+      clearChatsError();
+    }
+  }, [chatsError, clearChatsError, addToast]);
+
+  useEffect(() => {
+    if (aiError) {
+      addToast('error', aiError);
+      clearAIError();
+    }
+  }, [aiError, clearAIError, addToast]);
+
+  useEffect(() => {
+    if (imageError) {
+      addToast('error', imageError);
+      clearImageError();
+    }
+  }, [imageError, clearImageError, addToast]);
 
   const uiMessages: ImageUIMessage[] = useMemo(() => {
     const messages: ImageUIMessage[] = [];
@@ -118,6 +165,9 @@ export default function Home() {
 
   const formattedCurrentAIMessage = useMemo(() => formatMessage(currentAIMessage), [currentAIMessage]);
 
+  // Восстанавливаем переменную showCurrentAIMessage
+  const showCurrentAIMessage = currentAIMessage && streamingChatId === currentChat?.id;
+
   useEffect(() => {
     const checkMobile = () => {
       const mobile = window.innerWidth < 768;
@@ -157,78 +207,109 @@ export default function Home() {
         await fetchUserChats({ background: true });
       } catch (saveError) {
         console.error('Ошибка сохранения частичного ответа:', saveError);
+        addToast('error', 'Ошибка при сохранении ответа');
       }
     }
-  }, [addMessageToChat, fetchChat, fetchUserChats]);
+  }, [addMessageToChat, fetchChat, fetchUserChats, addToast]);
 
-const handleSendMessage = async (text: string) => {
-  if (!user || isGenerating || isGeneratingImage) return;
+  const handleSendMessage = async (text: string) => {
+    if (!user || isGenerating || isGeneratingImage) return;
 
-  const trimmed = text.trim();
-  const imageCommandMatch = trimmed.match(/^сгенерируй изображение:\s*(.+)$/i);
+    const trimmed = text.trim();
+    const imageCommandMatch = trimmed.match(/^Сгенерируй изображение:\s*(.+)$/i);
 
-  let chatId: string | undefined = currentChat?.id;
+    let chatId: string | undefined = currentChat?.id;
 
-  try {
-    if (imageCommandMatch) {
-    } else {
-      if (!chatId) {
-        chatId = await createNewChat(text);
+    try {
+      if (imageCommandMatch) {
+        // Обработка генерации изображения
+        const prompt = imageCommandMatch[1].trim();
+        
         if (!chatId) {
-          console.error('Не удалось создать чат');
-          return;
+          chatId = await createNewChat(`Генерация: ${prompt.substring(0, 30)}...`);
+          if (!chatId) {
+            addToast('error', 'Не удалось создать чат');
+            return;
+          }
+          await fetchChat(chatId);
         }
-        await fetchChat(chatId);
-      } else {
+        
         await addMessageToChat(chatId, 'user', text);
         await fetchChat(chatId);
-      }
+        
+        await handleImageGeneration(prompt, chatId, async (imageBase64) => {
+          if (imageBase64) {
+            await addMessageToChat(chatId!, 'assistant', `![Generated Image](data:image/png;base64,${imageBase64})`);
+            await fetchChat(chatId!);
+            await fetchUserChats({ background: true });
+            addToast('success', 'Изображение успешно сгенерировано');
+          }
+        });
+      } else {
+        if (!chatId) {
+          chatId = await createNewChat(text);
+          if (!chatId) {
+            addToast('error', 'Не удалось создать чат');
+            return;
+          }
+          await fetchChat(chatId);
+        } else {
+          await addMessageToChat(chatId, 'user', text);
+          await fetchChat(chatId);
+        }
 
-      const updatedChat = await fetchChat(chatId);
-      const messages = updatedChat?.messages || [];
-      const currentChatId = chatId;
+        const updatedChat = await fetchChat(chatId);
+        const messages = updatedChat?.messages || [];
+        const currentChatId = chatId;
 
-      let hasSaved = false;
+        let hasSaved = false;
 
-      await handleTextGeneration(
-        text,
-        currentChatId,
-        messages,
-        (chunk) => {
-          console.log('Получен чанк:', chunk);
-        },
-        async (completeText) => {
-          if (!currentChatId || !completeText.trim() || hasSaved) return;
-          
-          hasSaved = true;
-          await addMessageToChat(currentChatId, 'assistant', completeText);
-          await fetchChat(currentChatId);
-          await fetchUserChats({ background: true });
-        },
-        (error) => {
-          console.error('Ошибка генерации текста:', error);
-        },
-        async (partialText) => {
-          if (!currentChatId || !partialText.trim() || hasSaved) return;
-          
-          const wasAborted = abortControllerRef.current?.signal.aborted;
-          if (wasAborted) {
+        await handleTextGeneration(
+          text,
+          currentChatId,
+          messages,
+          (chunk) => {
+            console.log('Получен чанк:', chunk);
+          },
+          async (completeText) => {
+            if (!currentChatId || !completeText.trim() || hasSaved) return;
+            
             hasSaved = true;
-            await addMessageToChat(currentChatId, 'assistant', partialText);
+            await addMessageToChat(currentChatId, 'assistant', completeText);
             await fetchChat(currentChatId);
             await fetchUserChats({ background: true });
+          },
+          (error) => {
+            console.error('Ошибка генерации текста:', error);
+            addToast('error', 'Ошибка при генерации ответа');
+          },
+          async (partialText) => {
+            if (!currentChatId || !partialText.trim() || hasSaved) return;
+            
+            const wasAborted = abortControllerRef.current?.signal.aborted;
+            if (wasAborted) {
+              hasSaved = true;
+              await addMessageToChat(currentChatId, 'assistant', partialText);
+              await fetchChat(currentChatId);
+              await fetchUserChats({ background: true });
+            }
           }
-        }
-      );
+        );
+      }
+    } catch (error) {
+      console.error('Ошибка при отправке сообщения:', error);
+      addToast('error', 'Произошла ошибка при отправке сообщения');
     }
-  } catch (error) {
-    console.error('Ошибка при отправке сообщения:', error);
-  }
-};
+  };
 
   const handleSelectChat = useCallback(async (chatId: string) => {
-    await fetchChat(chatId);
-  }, [fetchChat]);
+    try {
+      await fetchChat(chatId);
+    } catch (error) {
+      console.error('Ошибка при выборе чата:', error);
+      addToast('error', 'Не удалось загрузить чат');
+    }
+  }, [fetchChat, addToast]);
 
   const handleNewChat = useCallback(() => {
     setCurrentChat(null);
@@ -237,10 +318,12 @@ const handleSendMessage = async (text: string) => {
   const handleTogglePin = useCallback(async (chatId: string, currentPinState: boolean) => {
     try {
       await togglePinChat(chatId, !currentPinState);
+      addToast('success', currentPinState ? 'Чат откреплен' : 'Чат закреплен');
     } catch (error) {
       console.error('Ошибка при закреплении чата:', error);
+      addToast('error', 'Не удалось изменить закрепление чата');
     }
-  }, [togglePinChat]);
+  }, [togglePinChat, addToast]);
 
   const handleDeleteChat = useCallback(async (chatId: string) => {
     try {
@@ -248,18 +331,12 @@ const handleSendMessage = async (text: string) => {
       if (currentChat?.id === chatId) {
         setCurrentChat(null);
       }
+      addToast('success', 'Чат удален');
     } catch (error) {
       console.error('Ошибка при удалении чата:', error);
+      addToast('error', 'Не удалось удалить чат');
     }
-  }, [deleteChat, currentChat?.id, setCurrentChat]);
-
-  const clearAllErrors = useCallback(() => {
-    clearChatsError();
-    clearAIError();
-    clearImageError();
-  }, [clearChatsError, clearAIError, clearImageError]);
-
-  const showCurrentAIMessage = currentAIMessage && streamingChatId === currentChat?.id;
+  }, [deleteChat, currentChat?.id, setCurrentChat, addToast]);
 
   if (!isClient || authLoading) {
     return (
@@ -269,24 +346,46 @@ const handleSendMessage = async (text: string) => {
     );
   }
 
-  if (chatsError || aiError || imageError) {
-    return (
-      <div className="min-h-screen bg-[#151517] flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-red-400 text-xl mb-4">Ошибка: {chatsError || aiError || imageError}</div>
-          <button
-            onClick={clearAllErrors}
-            className="bg-[#5686fe] text-white px-4 py-2 rounded-lg hover:bg-[#4970fe]"
-          >
-            Попробовать снова
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <main className="bg-[#151517] min-h-screen flex flex-col">
+    <main className="bg-[#151517] min-h-screen flex flex-col relative">
+      {/* Всплывающие уведомления */}
+      <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`
+              pointer-events-auto
+              animate-in slide-in-from-top-2 fade-in duration-200
+              rounded-lg shadow-lg border overflow-hidden
+              ${toast.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-200' : ''}
+              ${toast.type === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-200' : ''}
+              ${toast.type === 'info' ? 'bg-blue-500/10 border-blue-500/30 text-blue-200' : ''}
+            `}
+          >
+            <div className="flex items-start gap-2 p-4">
+              <div className="flex-1 text-sm">{toast.message}</div>
+              <button
+                onClick={() => removeToast(toast.id)}
+                className="p-1 hover:bg-white/10 rounded transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            
+            {/* Прогресс-бар для автоматического исчезновения */}
+            {toast.timeout && toast.timeout > 0 && (
+              <div 
+                className="h-0.5 bg-white/20"
+                style={{
+                  animation: `shrink ${toast.timeout}ms linear forwards`,
+                  transformOrigin: 'left'
+                }}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
       <div className={`fixed top-4 left-4 z-50 flex space-x-2 transition-all duration-300 ${
         isMenuOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'
       }`}>
@@ -340,7 +439,7 @@ const handleSendMessage = async (text: string) => {
                 <div className="text-center py-8">
                   <div className="text-gray-500 text-lg">Начните диалог с AI</div>
                   <div className="text-gray-400 text-sm mt-2">
-                      Для генерации изображения нужно написать <span className="font-mono bg-[#2a2a2c] px-1 rounded">сгенерируй изображение: [описание]</span>
+                      Для генерации изображения нужно написать <span className="font-mono bg-[#2a2a2c] px-1 rounded">Сгенерируй изображение: [описание]</span>
                   </div>
                 </div>
               )}
@@ -414,6 +513,17 @@ const handleSendMessage = async (text: string) => {
         disabled={isGenerating || chatsLoading || isGeneratingImage}
         isGenerating={isGenerating || isGeneratingImage}
       />
+
+      <style jsx>{`
+        @keyframes shrink {
+          from {
+            transform: scaleX(1);
+          }
+          to {
+            transform: scaleX(0);
+          }
+        }
+      `}</style>
     </main>
   );
 }
