@@ -1,5 +1,4 @@
 'use client';
-
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ChatInput from '../components/ChatInput';
 import MessageBubble from '../components/MessageBubble';
@@ -12,7 +11,7 @@ import { UIMessage, ChatHistory, Message as ChatMessage } from '../types';
 import { formatMessage } from '../utils/formatMessage';
 
 interface ImageUIMessage extends UIMessage {
-  imageBase64?: string;
+  imageSrc?: string;
   isGeneratingImage?: boolean;
 }
 
@@ -44,7 +43,6 @@ export default function Home() {
     error: chatsError,
     clearError: clearChatsError,
   } = useChats();
-
   const {
     isGenerating,
     error: aiError,
@@ -55,6 +53,7 @@ export default function Home() {
     currentAIMessage,
     abortControllerRef,
     stopGeneration,
+    stopImageGeneration,
     handleImageGeneration,
     handleTextGeneration,
     clearError: clearAIError,
@@ -64,82 +63,51 @@ export default function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
-  // Функция для добавления уведомления
   const addToast = useCallback((type: ToastNotification['type'], message: string, timeout = 5000) => {
     const id = Math.random().toString(36).substr(2, 9);
     setToasts(prev => [...prev, { id, type, message, timeout }]);
-    
     if (timeout > 0) {
-      setTimeout(() => {
-        setToasts(prev => prev.filter(toast => toast.id !== id));
-      }, timeout);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), timeout);
     }
   }, []);
 
-  // Функция для удаления уведомления
   const removeToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(toast => toast.id !== id));
+    setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
+  useEffect(() => setIsClient(true), []);
 
-  // Отслеживаем ошибки и показываем уведомления
   useEffect(() => {
-    if (chatsError) {
-      addToast('error', chatsError);
-      clearChatsError();
-    }
+    if (chatsError) { addToast('error', chatsError); clearChatsError(); }
   }, [chatsError, clearChatsError, addToast]);
 
   useEffect(() => {
-    if (aiError) {
-      addToast('error', aiError);
-      clearAIError();
-    }
+    if (aiError) { addToast('error', aiError); clearAIError(); }
   }, [aiError, clearAIError, addToast]);
 
   useEffect(() => {
-    if (imageError) {
-      addToast('error', imageError);
-      clearImageError();
-    }
+    if (imageError) { addToast('error', imageError); clearImageError(); }
   }, [imageError, clearImageError, addToast]);
 
   const uiMessages: ImageUIMessage[] = useMemo(() => {
     const messages: ImageUIMessage[] = [];
-
     if (currentChat?.messages) {
       currentChat.messages.forEach((msg: ChatMessage, index: number) => {
-        if (msg.role === 'assistant' && msg.content?.startsWith('![Generated Image]')) {
-          const match = msg.content.match(
-            /!\[Generated Image\]\(data:image\/png;base64,([^)]+)\)/
-          );
-          if (match && match[1]) {
-            messages.push({
-              id: index,
-              text: '',
-              isUser: false,
-              imageBase64: match[1],
-            });
-          } else {
-            messages.push({
-              id: index,
-              text: formatMessage(msg.content),
-              isUser: false,
-            });
-          }
-        } else {
-          messages.push({
-            id: index,
-            text: formatMessage(msg.content),
-            isUser: msg.role === 'user',
-          });
+        const isUser = msg.role === 'user';
+        let imageSrc: string | undefined = undefined;
+        if (msg.role === 'assistant' && msg.content) {
+          const match = msg.content.match(/!\[Generated Image\]\(([^)]+)\)/);
+          if (match?.[1]) imageSrc = match[1];
         }
+        messages.push({
+          id: index,
+          text: formatMessage(msg.content || ''),
+          isUser,
+          imageSrc,
+          isGeneratingImage: false,
+        });
       });
     }
-
     if (isClient && isGeneratingImage && imageGeneratingChatId === currentChat?.id) {
       messages.push({
         id: Date.now(),
@@ -148,7 +116,6 @@ export default function Home() {
         isGeneratingImage: true,
       });
     }
-
     return messages;
   }, [currentChat?.messages, isGeneratingImage, imageGeneratingChatId, isClient]);
 
@@ -160,12 +127,9 @@ export default function Home() {
       is_pinned: c.is_pinned,
       updated_at: c.updated_at
     })) || [],
-    [chats]
-  );
+  [chats]);
 
   const formattedCurrentAIMessage = useMemo(() => formatMessage(currentAIMessage), [currentAIMessage]);
-
-  // Восстанавливаем переменную showCurrentAIMessage
   const showCurrentAIMessage = currentAIMessage && streamingChatId === currentChat?.id;
 
   useEffect(() => {
@@ -185,46 +149,24 @@ export default function Home() {
 
   useEffect(() => {
     if (currentChat && messagesEndRef.current) {
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
   }, [currentChat?.id]);
 
   useEffect(() => {
     if ((isGenerating || isGeneratingImage) && messagesEndRef.current) {
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-      }, 50);
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
     }
   }, [isGenerating, isGeneratingImage]);
 
-  const savePartialResponse = useCallback(async (chatId: string, partialText: string) => {
-    if (partialText.trim()) {
-      try {
-        await addMessageToChat(chatId, 'assistant', partialText);
-        await fetchChat(chatId);
-        await fetchUserChats({ background: true });
-      } catch (saveError) {
-        console.error('Ошибка сохранения частичного ответа:', saveError);
-        addToast('error', 'Ошибка при сохранении ответа');
-      }
-    }
-  }, [addMessageToChat, fetchChat, fetchUserChats, addToast]);
-
   const handleSendMessage = async (text: string) => {
     if (!user || isGenerating || isGeneratingImage) return;
-
     const trimmed = text.trim();
     const imageCommandMatch = trimmed.match(/^Сгенерируй изображение:\s*(.+)$/i);
-
     let chatId: string | undefined = currentChat?.id;
-
     try {
       if (imageCommandMatch) {
-        // Обработка генерации изображения
         const prompt = imageCommandMatch[1].trim();
-        
         if (!chatId) {
           chatId = await createNewChat(`Генерация: ${prompt.substring(0, 30)}...`);
           if (!chatId) {
@@ -233,13 +175,11 @@ export default function Home() {
           }
           await fetchChat(chatId);
         }
-        
         await addMessageToChat(chatId, 'user', text);
         await fetchChat(chatId);
-        
-        await handleImageGeneration(prompt, chatId, async (imageBase64) => {
-          if (imageBase64) {
-            await addMessageToChat(chatId!, 'assistant', `![Generated Image](data:image/png;base64,${imageBase64})`);
+        await handleImageGeneration(prompt, chatId, async (imageMessage) => {
+          if (imageMessage) {
+            await addMessageToChat(chatId!, 'assistant', imageMessage);
             await fetchChat(chatId!);
             await fetchUserChats({ background: true });
             addToast('success', 'Изображение успешно сгенерировано');
@@ -257,13 +197,10 @@ export default function Home() {
           await addMessageToChat(chatId, 'user', text);
           await fetchChat(chatId);
         }
-
         const updatedChat = await fetchChat(chatId);
         const messages = updatedChat?.messages || [];
         const currentChatId = chatId;
-
         let hasSaved = false;
-
         await handleTextGeneration(
           text,
           currentChatId,
@@ -273,7 +210,6 @@ export default function Home() {
           },
           async (completeText) => {
             if (!currentChatId || !completeText.trim() || hasSaved) return;
-            
             hasSaved = true;
             await addMessageToChat(currentChatId, 'assistant', completeText);
             await fetchChat(currentChatId);
@@ -285,9 +221,7 @@ export default function Home() {
           },
           async (partialText) => {
             if (!currentChatId || !partialText.trim() || hasSaved) return;
-            
-            const wasAborted = abortControllerRef.current?.signal.aborted;
-            if (wasAborted) {
+            if (abortControllerRef.current?.signal.aborted) {
               hasSaved = true;
               await addMessageToChat(currentChatId, 'assistant', partialText);
               await fetchChat(currentChatId);
@@ -320,7 +254,7 @@ export default function Home() {
       await togglePinChat(chatId, !currentPinState);
       addToast('success', currentPinState ? 'Чат откреплен' : 'Чат закреплен');
     } catch (error) {
-      console.error('Ошибка при закреплении чата:', error);
+      console.error('Ошибка при закреплении:', error);
       addToast('error', 'Не удалось изменить закрепление чата');
     }
   }, [togglePinChat, addToast]);
@@ -328,12 +262,10 @@ export default function Home() {
   const handleDeleteChat = useCallback(async (chatId: string) => {
     try {
       await deleteChat(chatId);
-      if (currentChat?.id === chatId) {
-        setCurrentChat(null);
-      }
+      if (currentChat?.id === chatId) setCurrentChat(null);
       addToast('success', 'Чат удален');
     } catch (error) {
-      console.error('Ошибка при удалении чата:', error);
+      console.error('Ошибка при удалении:', error);
       addToast('error', 'Не удалось удалить чат');
     }
   }, [deleteChat, currentChat?.id, setCurrentChat, addToast]);
@@ -348,14 +280,12 @@ export default function Home() {
 
   return (
     <main className="bg-[#151517] min-h-screen flex flex-col relative">
-      {/* Всплывающие уведомления */}
       <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
         {toasts.map(toast => (
           <div
             key={toast.id}
             className={`
-              pointer-events-auto
-              animate-in slide-in-from-top-2 fade-in duration-200
+              pointer-events-auto animate-in slide-in-from-top-2 fade-in duration-200
               rounded-lg shadow-lg border overflow-hidden
               ${toast.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-200' : ''}
               ${toast.type === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-200' : ''}
@@ -364,31 +294,21 @@ export default function Home() {
           >
             <div className="flex items-start gap-2 p-4">
               <div className="flex-1 text-sm">{toast.message}</div>
-              <button
-                onClick={() => removeToast(toast.id)}
-                className="p-1 hover:bg-white/10 rounded transition-colors"
-              >
+              <button onClick={() => removeToast(toast.id)} className="p-1 hover:bg-white/10 rounded transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            
-            {/* Прогресс-бар для автоматического исчезновения */}
             {toast.timeout && toast.timeout > 0 && (
-              <div 
+              <div
                 className="h-0.5 bg-white/20"
-                style={{
-                  animation: `shrink ${toast.timeout}ms linear forwards`,
-                  transformOrigin: 'left'
-                }}
+                style={{ animation: `shrink ${toast.timeout}ms linear forwards`, transformOrigin: 'left' }}
               />
             )}
           </div>
         ))}
       </div>
 
-      <div className={`fixed top-4 left-4 z-50 flex space-x-2 transition-all duration-300 ${
-        isMenuOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'
-      }`}>
+      <div className={`fixed top-4 left-4 z-50 flex space-x-2 transition-all duration-300 ${isMenuOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
         <button
           onClick={() => setIsMenuOpen(true)}
           className="p-2 bg-[#1e1e20] rounded-lg hover:bg-[#38383a] border border-[#38383a]"
@@ -422,8 +342,7 @@ export default function Home() {
               <h1 className="text-xl font-bold text-white">AI Чат</h1>
               {currentChat && (
                 <p className="text-gray-400 text-sm mt-1 truncate">
-                  {currentChat.title}
-                  {currentChat.is_pinned && ' 📌'}
+                  {currentChat.title}{currentChat.is_pinned && ' 📌'}
                 </p>
               )}
             </div>
@@ -439,20 +358,21 @@ export default function Home() {
                 <div className="text-center py-8">
                   <div className="text-gray-500 text-lg">Начните диалог с AI</div>
                   <div className="text-gray-400 text-sm mt-2">
-                      Для генерации изображения нужно написать <span className="font-mono bg-[#2a2a2c] px-1 rounded">Сгенерируй изображение: [описание]</span>
+                    Для генерации изображения напишите: <span className="font-mono bg-[#2a2a2c] px-1 rounded">Сгенерируй изображение: [описание]</span>
                   </div>
                 </div>
               )}
 
-              {uiMessages.map((msg) => (
+              {uiMessages.map(msg => (
                 <div key={msg.id} className="w-full">
-                  {msg.imageBase64 ? (
+                  {msg.imageSrc ? (
                     <div className="flex justify-start">
                       <div className="max-w-full">
                         <img
-                          src={`data:image/png;base64,${msg.imageBase64}`}
+                          src={msg.imageSrc}
                           alt="Сгенерированное изображение"
-                          className="rounded-xl max-w-full h-auto shadow-xl border border-[#38383a]/60"
+                          className="rounded-xl max-w-full h-auto shadow-xl border border-[#38383a]/60 object-contain"
+                          loading="lazy"
                         />
                       </div>
                     </div>
@@ -508,22 +428,14 @@ export default function Home() {
 
       <ChatInput
         onSendMessage={handleSendMessage}
-        onStopGeneration={stopGeneration}
+        onStopGeneration={() => {
+          stopGeneration();
+          stopImageGeneration();
+        }}
         isMenuOpen={isMenuOpen && !isMobile}
         disabled={isGenerating || chatsLoading || isGeneratingImage}
         isGenerating={isGenerating || isGeneratingImage}
       />
-
-      <style jsx>{`
-        @keyframes shrink {
-          from {
-            transform: scaleX(1);
-          }
-          to {
-            transform: scaleX(0);
-          }
-        }
-      `}</style>
     </main>
   );
 }

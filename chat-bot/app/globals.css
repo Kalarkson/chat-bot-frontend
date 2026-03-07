@@ -20,23 +20,13 @@ main {
     @apply p-3 rounded-lg mb-2 max-w-[90%] mobile:max-w-[90%] tablet:max-w-3xl desktop:max-w-4xl;
   }
 }
-@font-face {
-  font-family: 'Droid Sans';
-  src: url('/fonts/DroidSans-Regular.ttf') format('truetype');
-  font-weight: normal;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'Droid Sans';
-  src: url('/fonts/DroidSans-Bold.ttf') format('truetype');
-  font-weight: bold;
-  font-style: normal;
-  font-display: swap;
-}
 body {
   font-family: 'Droid Sans', sans-serif;
 }
 .whitespace-pre-wrap {
   white-space: pre-wrap;
+}
+@keyframes shrink {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
 }

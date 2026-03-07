@@ -8,6 +8,7 @@ interface MessageBubbleProps {
     text: string;
     isUser: boolean;
     isGeneratingImage?: boolean;
+    imageSrc?: string;
   };
 }
 
@@ -24,8 +25,6 @@ const MessageBubble = ({ message }: MessageBubbleProps) => {
     }
   };
 
-  const imageMatch = message.text.match(/!\[Generated Image\]\(data:image\/png;base64,([^)]+)\)/);
-
   if (message.isGeneratingImage) {
     return (
       <div className="w-full flex justify-start">
@@ -41,13 +40,21 @@ const MessageBubble = ({ message }: MessageBubbleProps) => {
     );
   }
 
-  if (imageMatch && imageMatch[1]) {
-    const base64 = imageMatch[1];
+  let imageSrc = message.imageSrc;
+
+  if (!imageSrc) {
+    const imageMatch = message.text.match(/!\[Generated Image\]\((data:image\/png;base64,([^)]+))\)/);
+    if (imageMatch && imageMatch[1]) {
+      imageSrc = imageMatch[1];
+    }
+  }
+
+  if (imageSrc) {
     return (
       <div className="w-full flex justify-start">
         <div className="max-w-full">
           <img
-            src={`data:image/png;base64,${base64}`}
+            src={imageSrc}
             alt="Сгенерированное изображение"
             className="rounded-xl max-w-full h-auto shadow-xl border border-[#38383a]/60"
           />
@@ -57,7 +64,7 @@ const MessageBubble = ({ message }: MessageBubbleProps) => {
   }
 
   const formattedText = formatMessage(message.text);
-  
+
   return (
     <div className={`w-full ${message.isUser ? 'flex justify-end' : 'flex justify-start'}`}>
       <div className={`${message.isUser ? 'max-w-[83.333%]' : 'max-w-full'}`}>
